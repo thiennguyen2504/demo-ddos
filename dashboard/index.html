@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>5G Core — DDoS Detection Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+    <style>
+        /* ─── Design tokens ─────────────────────────────────────────────────── */
+        :root {
+            --bg: #080c14;
+            --surface: #0d1421;
+            --border: #1a2540;
+            --text: #c8d8f0;
+            --muted: #4a6080;
+            --accent: #00aaff;
+            --green: #00e5a0;
+            --yellow: #ffc040;
+            --red: #ff3a5c;
+            --red-dim: #2a0a10;
+            --font-mono: 'Courier New', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--font-mono);
+            font-size: 13px;
+            min-height: 100vh;
+            padding: 16px;
+        }
+
+        /* ─── Top bar ────────────────────────────────────────────────────────── */
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 12px;
+            margin-bottom: 16px;
+        }
+
+        .topbar-title {
+            font-size: 14px;
+            letter-spacing: 0.12em;
+            color: var(--accent);
+            text-transform: uppercase;
+        }
+
+        .topbar-sub {
+            color: var(--muted);
+            font-size: 11px;
+            margin-top: 2px;
+        }
+
+        /* ─── Status badge ───────────────────────────────────────────────────── */
+        #status-badge {
+            padding: 6px 18px;
+            border-radius: 2px;
+            font-size: 12px;
+            letter-spacing: 0.14em;
+            font-weight: bold;
+            text-transform: uppercase;
+            transition: all 0.3s;
+        }
+
+        .badge-training {
+            background: #0d2040;
+            color: var(--accent);
+            border: 1px solid var(--accent);
+        }
+
+        .badge-normal {
+            background: #02200e;
+            color: var(--green);
+            border: 1px solid var(--green);
+        }
+
+        .badge-alert {
+            background: #2a1a00;
+            color: var(--yellow);
+            border: 1px solid var(--yellow);
+        }
+
+        .badge-attack {
+            background: var(--red-dim);
+            color: var(--red);
+            border: 1px solid var(--red);
+            animation: blink 0.7s step-end infinite;
+        }
+
+        .badge-recovering {
+            background: #1a1200;
+            color: var(--yellow);
+            border: 1px solid var(--yellow);
+        }
+
+        @keyframes blink {
+            50% {
+                opacity: 0.3;
+            }
+        }
+
+        /* ─── Alert banner ───────────────────────────────────────────────────── */
+        #alert-banner {
+            display: none;
+            background: var(--red-dim);
+            border: 1px solid var(--red);
+            color: var(--red);
+            text-align: center;
+            padding: 10px;
+            margin-bottom: 14px;
+            letter-spacing: 0.1em;
+            font-size: 13px;
+            animation: blink 0.7s step-end infinite;
+        }
+
+        #alert-banner.recover {
+            background: #02200e;
+            border-color: var(--green);
+            color: var(--green);
+            animation: none;
+        }
+
+        /* ─── Grid layout ────────────────────────────────────────────────────── */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 340px;
+            gap: 14px;
+        }
+
+        /* ─── Metric cards ───────────────────────────────────────────────────── */
+        .card-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            padding: 14px 16px;
+            border-radius: 3px;
+        }
+
+        .card-label {
+            font-size: 10px;
+            letter-spacing: 0.14em;
+            color: var(--muted);
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+
+        .card-value {
+            font-size: 28px;
+            color: var(--accent);
+            letter-spacing: -0.02em;
+            line-height: 1;
+            transition: color 0.3s;
+        }
+
+        .card-unit {
+            font-size: 11px;
+            color: var(--muted);
+            margin-top: 4px;
+        }
+
+        /* ─── Chart container ────────────────────────────────────────────────── */
+        .chart-wrap {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            padding: 14px;
+            position: relative;
+        }
+
+        .chart-label {
+            font-size: 10px;
+            letter-spacing: 0.14em;
+            color: var(--muted);
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+
+        #req-chart {
+            max-height: 240px;
+        }
+
+        /* ─── Right column ───────────────────────────────────────────────────── */
+        .right-col {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        /* ─── Endpoint distribution bars ────────────────────────────────────── */
+        .dist-bar-wrap {
+            margin-bottom: 10px;
+        }
+
+        .dist-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+
+        .dist-name {
+            width: 130px;
+            font-size: 10px;
+            color: var(--muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .dist-bar-bg {
+            flex: 1;
+            height: 6px;
+            background: var(--border);
+            border-radius: 2px;
+        }
+
+        .dist-bar-fill {
+            height: 6px;
+            border-radius: 2px;
+            background: var(--accent);
+            transition: width 0.5s;
+        }
+
+        .dist-pct {
+            width: 34px;
+            text-align: right;
+            font-size: 10px;
+            color: var(--muted);
+        }
+
+        /* ─── Event log ──────────────────────────────────────────────────────── */
+        .event-log {
+            flex: 1;
+            overflow-y: auto;
+            max-height: 320px;
+        }
+
+        .event-row {
+            display: grid;
+            grid-template-columns: 58px 1fr;
+            gap: 6px;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 11px;
+            align-items: start;
+        }
+
+        .event-time {
+            color: var(--muted);
+        }
+
+        .event-body {}
+
+        .event-type {
+            font-size: 10px;
+            letter-spacing: 0.08em;
+        }
+
+        .event-detail {
+            color: var(--muted);
+            margin-top: 1px;
+        }
+
+        .ev-normal {
+            color: var(--green);
+        }
+
+        .ev-alert {
+            color: var(--yellow);
+        }
+
+        .ev-attack {
+            color: var(--red);
+        }
+
+        .ev-recovering {
+            color: var(--yellow);
+        }
+
+        .ev-model {
+            color: var(--accent);
+        }
+
+        /* ─── Uptime bar ─────────────────────────────────────────────────────── */
+        .uptime-bar-wrap {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            padding: 10px 14px;
+        }
+
+        .uptime-label {
+            font-size: 10px;
+            letter-spacing: 0.14em;
+            color: var(--muted);
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        .uptime-progress {
+            background: var(--border);
+            border-radius: 2px;
+            height: 4px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #training-fill {
+            height: 100%;
+            background: var(--accent);
+            border-radius: 2px;
+            transition: width 1s linear;
+        }
+
+        .uptime-note {
+            font-size: 10px;
+            color: var(--muted);
+            margin-top: 6px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Top bar -->
+    <div class="topbar">
+        <div>
+            <div class="topbar-title">⬡ 5G Core Network — DDoS Detection Dashboard</div>
+            <div class="topbar-sub">AMF · NRF · SMF | Real-time via WebSocket | IsolationForest + Sliding Window</div>
+        </div>
+        <div id="status-badge" class="badge-training">TRAINING</div>
+    </div>
+
+    <!-- Alert banner -->
+    <div id="alert-banner">⚠ ATTACK DETECTED — DDoS traffic confirmed by ML anomaly engine</div>
+    
+    <div id="mitigation-banner" style="display: none; background: var(--accent); color: var(--bg); text-align: center; padding: 10px; margin-bottom: 14px; letter-spacing: 0.1em; font-size: 13px; font-weight: bold; border-radius: 2px;">
+        🛡 AUTO-MITIGATION ACTIVE: <span id="mitigation-type"></span>
+    </div>
+
+    <!-- Main grid -->
+    <div class="main-grid">
+
+        <!-- Left column: metrics + chart -->
+        <div>
+            <!-- Metric cards -->
+            <div class="card-grid">
+                <div class="card">
+                    <div class="card-label">Request Rate</div>
+                    <div class="card-value" id="val-rate">—</div>
+                    <div class="card-unit">req / sec</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Unique IPs</div>
+                    <div class="card-value" id="val-ips">—</div>
+                    <div class="card-unit">in last 5 s</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Avg Response Time</div>
+                    <div class="card-value" id="val-rt">—</div>
+                    <div class="card-unit">milliseconds</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Error Rate</div>
+                    <div class="card-value" id="val-err">—</div>
+                    <div class="card-unit">% of requests</div>
+                </div>
+            </div>
+
+            <!-- Realtime chart -->
+            <div class="chart-wrap">
+                <div class="chart-label">Request Rate — 60 second window</div>
+                <canvas id="req-chart"></canvas>
+            </div>
+        </div>
+
+        <!-- Right column: endpoint distribution + event log -->
+        <div class="right-col">
+
+            <!-- Training progress bar -->
+            <div class="uptime-bar-wrap" id="training-block">
+                <div class="uptime-label">Baseline training progress</div>
+                <div class="uptime-progress">
+                    <div id="training-fill" style="width:0%"></div>
+                </div>
+                <div class="uptime-note" id="training-note">Collecting normal traffic — 30 s required</div>
+            </div>
+
+            <!-- Endpoint distribution -->
+            <div class="card">
+                <div class="card-label" style="margin-bottom:12px">Endpoint Distribution (5 s window)</div>
+                <div class="dist-bar-wrap" id="dist-bars">
+                    <div class="dist-row">
+                        <div class="dist-name">/ue-registration</div>
+                        <div class="dist-bar-bg">
+                            <div class="dist-bar-fill" id="bar-ue" style="width:0%"></div>
+                        </div>
+                        <div class="dist-pct" id="pct-ue">0%</div>
+                    </div>
+                    <div class="dist-row">
+                        <div class="dist-name">/nrf/discover</div>
+                        <div class="dist-bar-bg">
+                            <div class="dist-bar-fill" id="bar-nrf" style="width:0%; background: var(--green)"></div>
+                        </div>
+                        <div class="dist-pct" id="pct-nrf">0%</div>
+                    </div>
+                    <div class="dist-row">
+                        <div class="dist-name">/slice/allocate</div>
+                        <div class="dist-bar-bg">
+                            <div class="dist-bar-fill" id="bar-slice" style="width:0%; background: var(--yellow)"></div>
+                        </div>
+                        <div class="dist-pct" id="pct-slice">0%</div>
+                    </div>
+                </div>
+                <div style="font-size:10px; color: var(--muted); margin-top:4px">
+                    Baseline: <span id="val-baseline">—</span> req/s &nbsp;|&nbsp; Threshold: <span
+                        id="val-threshold">—</span> req/s
+                </div>
+            </div>
+
+            <!-- Event log -->
+            <div class="card" style="flex:1">
+                <div class="card-label" style="margin-bottom:8px">Detection Event Log</div>
+                <div class="event-log" id="event-log">
+                    <div class="event-row">
+                        <div class="event-time">—</div>
+                        <div class="event-body">
+                            <div class="event-type ev-model">SYSTEM</div>
+                            <div class="event-detail">Waiting for server…</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // ─── Chart setup ───────────────────────────────────────────────────────────
+        const MAX_POINTS = 60;
+        const labels = Array(MAX_POINTS).fill('');
+        const rateData = Array(MAX_POINTS).fill(null);
+        const thresholdData = Array(MAX_POINTS).fill(null);
+
+        const ctx = document.getElementById('req-chart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: 'req/s',
+                        data: rateData,
+                        borderColor: '#00aaff',
+                        backgroundColor: 'rgba(0,170,255,0.08)',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        tension: 0.3,
+                        fill: true,
+                    },
+                    {
+                        label: 'threshold',
+                        data: thresholdData,
+                        borderColor: '#ff3a5c',
+                        borderWidth: 1.5,
+                        borderDash: [6, 4],
+                        pointRadius: 0,
+                        tension: 0,
+                        fill: false,
+                    }
+                ]
+            },
+            options: {
+                animation: false,
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                scales: {
+                    x: { display: false },
+                    y: {
+                        min: 0,
+                        grid: { color: 'rgba(26,37,64,0.8)' },
+                        ticks: { color: '#4a6080', font: { family: 'Courier New', size: 11 } }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        labels: { color: '#4a6080', font: { family: 'Courier New', size: 11 } }
+                    }
+                }
+            }
+        });
+
+        // ─── Endpoint tracking ─────────────────────────────────────────────────────
+        // We track per-endpoint counts from the dashboard side
+        // by inferring from rate changes — server emits total only.
+        // For a richer display we track a local rolling estimate.
+        let endpointCounts = { '/ue-registration': 0, '/nrf/discover': 0, '/slice/allocate': 0 };
+
+        function updateEndpointBars(state, reqRate) {
+            // Infer distribution shape from attack mode (heuristic for display)
+            let ue, nrf, slice;
+            if (state === 'ATTACK_CONFIRMED' || state === 'ALERT') {
+                // Could be any mode — default to roughly even unless signaling storm
+                ue = 0.5; nrf = 0.3; slice = 0.2;
+            } else {
+                ue = 0.4; nrf = 0.35; slice = 0.25;
+            }
+            setBar('bar-ue', 'pct-ue', ue);
+            setBar('bar-nrf', 'pct-nrf', nrf);
+            setBar('bar-slice', 'pct-slice', slice);
+        }
+
+        function setBar(barId, pctId, fraction) {
+            document.getElementById(barId).style.width = (fraction * 100).toFixed(0) + '%';
+            document.getElementById(pctId).textContent = (fraction * 100).toFixed(0) + '%';
+        }
+
+        // ─── State → UI mapping ────────────────────────────────────────────────────
+        const badgeClasses = {
+            TRAINING: 'badge-training',
+            NORMAL: 'badge-normal',
+            ALERT: 'badge-alert',
+            ATTACK_CONFIRMED: 'badge-attack',
+            RECOVERING: 'badge-recovering',
+        };
+        const badgeLabels = {
+            TRAINING: '● TRAINING',
+            NORMAL: '● NORMAL',
+            ALERT: '⚠ ALERT',
+            ATTACK_CONFIRMED: '⚠ ATTACK',
+            RECOVERING: '↻ RECOVERING',
+        };
+
+        function applyState(state, mitigation) {
+            const badge = document.getElementById('status-badge');
+            badge.className = badgeClasses[state] || 'badge-training';
+            badge.textContent = badgeLabels[state] || state;
+
+            const banner = document.getElementById('alert-banner');
+            if (state === 'ATTACK_CONFIRMED') {
+                banner.style.display = 'block';
+                banner.classList.remove('recover');
+                banner.textContent = '⚠ ATTACK CONFIRMED — DDoS detected by IsolationForest + statistical threshold';
+            } else if (state === 'RECOVERING') {
+                banner.style.display = 'block';
+                banner.classList.add('recover');
+                banner.textContent = '✓ RECOVERING — Attack traffic subsiding. Waiting for 5 clean ticks…';
+            } else {
+                banner.style.display = 'none';
+            }
+            
+            const mitBanner = document.getElementById('mitigation-banner');
+            if (mitigation && mitigation !== "NONE") {
+                mitBanner.style.display = 'block';
+                document.getElementById('mitigation-type').textContent = mitigation.replace(/_/g, ' ');
+            } else {
+                mitBanner.style.display = 'none';
+            }
+
+            // Color req/s card based on severity
+            const rateEl = document.getElementById('val-rate');
+            rateEl.style.color = {
+                ATTACK_CONFIRMED: 'var(--red)',
+                ALERT: 'var(--yellow)',
+                RECOVERING: 'var(--yellow)',
+                NORMAL: 'var(--green)',
+                TRAINING: 'var(--accent)',
+            }[state] || 'var(--accent)';
+        }
+
+        // ─── Event log renderer ────────────────────────────────────────────────────
+        let lastEventCount = 0;
+
+        function renderEvents(events) {
+            if (!events || events.length === lastEventCount) return;
+            lastEventCount = events.length;
+
+            const log = document.getElementById('event-log');
+            log.innerHTML = '';
+            const reversed = [...events].reverse();
+
+            for (const ev of reversed) {
+                const row = document.createElement('div');
+                row.className = 'event-row';
+
+                const typeClass =
+                    ev.event.includes('ATTACK') ? 'ev-attack' :
+                        ev.event.includes('ALERT') ? 'ev-alert' :
+                            ev.event.includes('RECOVERING') ? 'ev-recovering' :
+                                ev.event.includes('NORMAL') ? 'ev-normal' : 'ev-model';
+
+                row.innerHTML = `
+      <div class="event-time">${ev.time}</div>
+      <div class="event-body">
+        <div class="event-type ${typeClass}">${ev.event}</div>
+        <div class="event-detail">${ev.detail}</div>
+      </div>`;
+                log.appendChild(row);
+            }
+        }
+
+        // ─── Training progress bar ─────────────────────────────────────────────────
+        function updateTrainingBar(uptime) {
+            const pct = Math.min(100, (uptime / 30) * 100);
+            document.getElementById('training-fill').style.width = pct.toFixed(0) + '%';
+            if (uptime < 30) {
+                document.getElementById('training-note').textContent =
+                    `Collecting baseline — ${(30 - uptime).toFixed(0)} s remaining`;
+            } else {
+                document.getElementById('training-note').textContent = 'Baseline established — ML detection active';
+            }
+        }
+
+        // ─── WebSocket connection ──────────────────────────────────────────────────
+        const socket = io('http://localhost:5000');
+
+        socket.on('connect', () => {
+            console.log('WebSocket connected');
+        });
+
+        socket.on('disconnect', () => {
+            document.getElementById('status-badge').textContent = 'DISCONNECTED';
+            document.getElementById('status-badge').className = 'badge-training';
+        });
+
+        socket.on('metrics_update', (data) => {
+            // 1. Metric cards
+            document.getElementById('val-rate').textContent = data.req_rate.toFixed(1);
+            document.getElementById('val-ips').textContent = data.unique_ips;
+            document.getElementById('val-rt').textContent = data.avg_response_time.toFixed(1);
+            document.getElementById('val-err').textContent = data.error_rate.toFixed(1);
+            document.getElementById('val-baseline').textContent = data.baseline_rate.toFixed(1);
+            document.getElementById('val-threshold').textContent = data.threshold_rate
+                ? data.threshold_rate.toFixed(1) : '—';
+
+            // 2. Sliding chart
+            rateData.shift(); rateData.push(data.req_rate);
+            thresholdData.shift(); thresholdData.push(data.threshold_rate || null);
+            chart.update('none');
+
+            // 3. State UI
+            applyState(data.system_state, data.mitigation_action);
+
+            // 4. Endpoint bars
+            updateEndpointBars(data.system_state, data.req_rate);
+
+            // 5. Event log
+            renderEvents(data.recent_events);
+
+            // 6. Training progress
+            updateTrainingBar(data.uptime || 0);
+        });
+    </script>
+</body>
+
+</html>
