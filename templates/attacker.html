@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Attack Simulator</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --panel: #ffffff;
+      --panel-alt: #f1f5f9;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --blue: #2563eb;
+      --red: #dc2626;
+      --green: #16a34a;
+      --shadow: 0 20px 40px rgba(15, 23, 42, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+      color: var(--text);
+    }
+
+    .shell { max-width: 1500px; margin: 0 auto; padding: 24px; min-height: 100vh; }
+    .hero, .panel, .card, .statbox {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      padding: 22px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .hero h1, .section-title { margin: 0; letter-spacing: -0.03em; }
+    .hero p, .muted { color: var(--muted); margin: 6px 0 0; }
+
+    .status-chip {
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: #eff6ff;
+      color: #1d4ed8;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .card {
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-height: 280px;
+    }
+
+    .card-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .attack-name { font-size: 20px; font-weight: 800; letter-spacing: -0.03em; margin: 0; }
+    .attack-desc { color: var(--muted); line-height: 1.5; margin: 0; }
+    .icon {
+      width: 48px; height: 48px; border-radius: 16px; display: grid; place-items: center;
+      background: #eff6ff; color: #1d4ed8; font-weight: 800;
+    }
+    .icon.red { background: #fef2f2; color: #b91c1c; }
+    .icon.green { background: #ecfdf5; color: #047857; }
+
+    .slider-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: auto;
+      flex-wrap: wrap;
+    }
+
+    input[type="range"] { width: min(260px, 100%); }
+
+    .btn {
+      border: 0;
+      border-radius: 14px;
+      padding: 14px 18px;
+      font-weight: 800;
+      cursor: pointer;
+      color: white;
+      background: var(--red);
+      box-shadow: 0 12px 20px rgba(220, 38, 38, 0.2);
+    }
+
+    .btn.blue { background: var(--blue); box-shadow: 0 12px 20px rgba(37, 99, 235, 0.2); }
+
+    .section {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 18px;
+    }
+
+    .panel { padding: 18px; }
+    .panel h2 { margin: 0 0 10px; }
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      background: var(--panel-alt);
+      border-radius: 14px;
+      margin-bottom: 10px;
+      font-size: 14px;
+    }
+
+    .progress {
+      width: 100%; height: 14px; background: #e2e8f0; border-radius: 999px; overflow: hidden;
+      margin: 14px 0;
+    }
+
+    .progress > div { height: 100%; width: 0%; background: linear-gradient(90deg, #2563eb, #60a5fa); }
+
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+    .stop { background: var(--red); }
+    .secondary { background: var(--blue); }
+
+    @media (max-width: 1100px) {
+      .grid, .section { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="hero">
+      <div>
+        <h1>Attack Simulator — 5G DDoS Test Panel</h1>
+        <p>Drive realistic traffic patterns against the local 5G network function simulator.</p>
+      </div>
+      <div class="status-chip" id="statusChip">Idle</div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="card-top">
+          <div>
+            <h3 class="attack-name">HTTP Flood</h3>
+            <p class="attack-desc">Overwhelms SBA API endpoints (NRF/AMF) with massive HTTP requests</p>
+          </div>
+          <div class="icon red">HF</div>
+        </div>
+        <div class="slider-row">
+          <label>Duration: <span id="d1">30</span>s</label>
+          <input type="range" min="10" max="120" value="30" data-target="d1" data-mode="http_flood" />
+          <button class="btn" data-mode="http_flood">Launch Attack</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-top">
+          <div>
+            <h3 class="attack-name">Signaling Storm</h3>
+            <p class="attack-desc">Simulates thousands of UEs simultaneously registering, exhausting AMF capacity</p>
+          </div>
+          <div class="icon red">SS</div>
+        </div>
+        <div class="slider-row">
+          <label>Duration: <span id="d2">30</span>s</label>
+          <input type="range" min="10" max="120" value="30" data-target="d2" data-mode="signaling_storm" />
+          <button class="btn" data-mode="signaling_storm">Launch Attack</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-top">
+          <div>
+            <h3 class="attack-name">Slice Exhaustion</h3>
+            <p class="attack-desc">Floods slice allocation endpoint, preventing legitimate slice provisioning</p>
+          </div>
+          <div class="icon red">SE</div>
+        </div>
+        <div class="slider-row">
+          <label>Duration: <span id="d3">30</span>s</label>
+          <input type="range" min="10" max="120" value="30" data-target="d3" data-mode="slice_exhaustion" />
+          <button class="btn" data-mode="slice_exhaustion">Launch Attack</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-top">
+          <div>
+            <h3 class="attack-name">Normal Traffic</h3>
+            <p class="attack-desc">Generates realistic background traffic for baseline calibration</p>
+          </div>
+          <div class="icon green">NT</div>
+        </div>
+        <div class="slider-row">
+          <label>Duration: <span id="d4">30</span>s</label>
+          <input type="range" min="10" max="120" value="30" data-target="d4" data-mode="normal" />
+          <button class="btn blue" data-mode="normal">Launch Attack</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="panel">
+        <h2 class="section-title">Live Attack Stats</h2>
+        <div class="muted" id="attackMeta">No active attack</div>
+        <div class="stat-row"><span>Status</span><strong id="attackStatus">Idle</strong></div>
+        <div class="stat-row"><span>Mode</span><strong id="attackMode">-</strong></div>
+        <div class="stat-row"><span>Countdown</span><strong id="attackCountdown">0s</strong></div>
+        <div class="stat-row"><span>Requests Sent</span><strong id="requestsSent">0</strong></div>
+        <div class="progress"><div id="progressBar"></div></div>
+        <div class="controls">
+          <button class="btn stop" id="stopBtn">Stop Attack</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2 class="section-title">Baseline Calibration</h2>
+        <p class="muted">Use normal traffic first so the detector learns a clean baseline before launching floods.</p>
+        <div class="controls">
+          <button class="btn blue" id="baselineBtn">Run Normal Traffic for 30s (Calibrate Baseline)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let statusTimer = null;
+
+    function activeDuration(button) {
+      const card = button.closest(".card");
+      const slider = card.querySelector('input[type="range"]');
+      return parseInt(slider.value, 10) || 30;
+    }
+
+    async function startAttack(mode, duration) {
+      const response = await fetch("http://localhost:5001/attack/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode, duration })
+      });
+      return response.json();
+    }
+
+    async function stopAttack() {
+      await fetch("http://localhost:5001/attack/stop", { method: "POST" });
+    }
+
+    async function refreshStatus() {
+      try {
+        const response = await fetch("http://localhost:5001/attack/status");
+        const data = await response.json();
+        document.getElementById("attackStatus").textContent = data.running ? "Running" : "Idle";
+        document.getElementById("attackMode").textContent = data.mode || "idle";
+        document.getElementById("attackCountdown").textContent = `${data.duration_remaining || 0}s`;
+        document.getElementById("requestsSent").textContent = data.requests_sent || 0;
+        document.getElementById("progressBar").style.width = `${data.progress || 0}%`;
+        document.getElementById("statusChip").textContent = data.running ? `Running: ${data.mode}` : "Idle";
+        document.getElementById("attackMeta").textContent = data.running ? `Mode ${data.mode} with ${data.duration_remaining}s remaining` : "No active attack";
+
+        if (!data.running && statusTimer) {
+          clearInterval(statusTimer);
+          statusTimer = null;
+        }
+      } catch (error) {
+        console.warn("status fetch failed", error);
+      }
+    }
+
+    document.querySelectorAll('input[type="range"]').forEach((slider) => {
+      slider.addEventListener("input", () => {
+        document.getElementById(slider.dataset.target).textContent = slider.value;
+      });
+    });
+
+    document.querySelectorAll(".btn[data-mode]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const duration = activeDuration(button);
+        const mode = button.dataset.mode;
+        await startAttack(mode, duration);
+        if (!statusTimer) {
+          refreshStatus();
+          statusTimer = setInterval(refreshStatus, 500);
+        }
+      });
+    });
+
+    document.getElementById("stopBtn").addEventListener("click", async () => {
+      await stopAttack();
+      await refreshStatus();
+    });
+
+    document.getElementById("baselineBtn").addEventListener("click", async () => {
+      await startAttack("normal", 30);
+      if (!statusTimer) {
+        refreshStatus();
+        statusTimer = setInterval(refreshStatus, 500);
+      }
+    });
+
+    refreshStatus();
+  </script>
+</body>
+</html>

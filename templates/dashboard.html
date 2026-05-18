@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>5G Network DDoS Detection System</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --panel: #ffffff;
+      --panel-alt: #f1f5f9;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --green: #16a34a;
+      --amber: #d97706;
+      --red: #dc2626;
+      --blue: #2563eb;
+      --shadow: 0 20px 40px rgba(15, 23, 42, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+      color: var(--text);
+    }
+
+    .shell {
+      min-height: 100vh;
+      padding: 24px;
+      max-width: 1600px;
+      margin: 0 auto;
+    }
+
+    .topbar, .panel, .card, .table-wrap {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      border-radius: 20px;
+    }
+
+    .topbar {
+      padding: 18px 22px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 18px;
+      position: sticky;
+      top: 16px;
+      z-index: 10;
+      backdrop-filter: blur(10px);
+    }
+
+    .title {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .title h1 {
+      margin: 0;
+      font-size: 24px;
+      letter-spacing: -0.03em;
+    }
+
+    .title span, .meta, .muted { color: var(--muted); }
+
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .status-pill {
+      padding: 10px 16px;
+      border-radius: 999px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      font-size: 12px;
+      border: 1px solid transparent;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    .status-normal { background: #dcfce7; color: #166534; border-color: #86efac; }
+    .status-warning { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
+    .status-critical { background: #fee2e2; color: #991b1b; border-color: #fca5a5; }
+
+    .grid {
+      display: grid;
+      gap: 18px;
+    }
+
+    .metrics {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-bottom: 18px;
+    }
+
+    .card {
+      padding: 18px;
+      position: relative;
+      overflow: hidden;
+      min-height: 140px;
+    }
+
+    .card::after {
+      content: "";
+      position: absolute;
+      inset: auto -40px -40px auto;
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(37,99,235,0.12), transparent 70%);
+      pointer-events: none;
+    }
+
+    .metric-label { color: var(--muted); font-size: 13px; font-weight: 600; }
+    .metric-value { font-size: 34px; font-weight: 800; margin-top: 8px; letter-spacing: -0.04em; }
+    .metric-sub { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+    .content-grid {
+      display: grid;
+      grid-template-columns: 1.3fr 0.9fr;
+      gap: 18px;
+      margin-bottom: 18px;
+      align-items: start;
+    }
+
+    .charts-row {
+      display: grid;
+      grid-template-columns: 1fr 0.85fr;
+      gap: 18px;
+    }
+
+    .chart-card {
+      min-height: 320px;
+      height: 320px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .chart-wrap {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .panel {
+      padding: 18px;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+      gap: 12px;
+    }
+
+    .panel-header h2 {
+      margin: 0;
+      font-size: 16px;
+      letter-spacing: -0.02em;
+    }
+
+    .badge {
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      background: var(--panel-alt);
+      color: var(--muted);
+    }
+
+    .stat-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      background: var(--panel-alt);
+      border-radius: 14px;
+      font-size: 14px;
+    }
+
+    .detection-box {
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 16px;
+      margin-top: 14px;
+    }
+
+    .callout {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      color: #1e3a8a;
+      padding: 14px;
+      border-radius: 16px;
+      margin-top: 10px;
+      font-weight: 600;
+    }
+
+    .callout.critical { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+    .callout.warning { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+
+    .state-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+
+    .dot-green { background: #16a34a; }
+    .dot-amber { background: #d97706; }
+    .dot-red { background: #dc2626; }
+
+    .table-wrap {
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .table-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .filters {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .filter-btn {
+      border: 1px solid var(--border);
+      background: white;
+      color: var(--text);
+      border-radius: 999px;
+      padding: 8px 14px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .filter-btn.active {
+      background: var(--text);
+      color: white;
+      border-color: var(--text);
+    }
+
+    .log-table-wrap {
+      max-height: 360px;
+      overflow: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      background: #f8fafc;
+      text-align: left;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-weight: 700;
+      z-index: 1;
+    }
+
+    tbody td {
+      padding: 12px 16px;
+      border-bottom: 1px solid #eef2f7;
+      white-space: nowrap;
+    }
+
+    tbody tr.blocked {
+      background: #fff1f2;
+      color: #991b1b;
+    }
+
+    tbody tr:hover { background: #f8fafc; }
+
+    .charts-card {
+      min-height: 360px;
+    }
+
+    canvas {
+      max-width: 100%;
+      display: block;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(37,99,235,0); }
+      50% { transform: scale(1.02); box-shadow: 0 0 0 8px rgba(37,99,235,0.05); }
+    }
+
+    @media (max-width: 1180px) {
+      .metrics, .content-grid, .charts-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <div class="title">
+        <h1>5G Network DDoS Detection System</h1>
+        <span>Realtime monitoring for simulated 5G control-plane traffic</span>
+      </div>
+      <div class="topbar-right">
+        <div id="statusPill" class="status-pill status-normal">NORMAL</div>
+        <div class="badge" id="clock">--:--:--</div>
+      </div>
+    </div>
+
+    <div class="grid metrics">
+      <div class="card">
+        <div class="metric-label">Requests / sec</div>
+        <div class="metric-value" id="reqRate">0</div>
+        <div class="metric-sub" id="reqRateSub">Last 5 seconds</div>
+      </div>
+      <div class="card">
+        <div class="metric-label">Unique IPs</div>
+        <div class="metric-value" id="uniqueIps">0</div>
+        <div class="metric-sub">Sliding 5-second window</div>
+      </div>
+      <div class="card">
+        <div class="metric-label">Avg Response Time</div>
+        <div class="metric-value" id="avgResponse">0 ms</div>
+        <div class="metric-sub">All live requests</div>
+      </div>
+      <div class="card">
+        <div class="metric-label">Error Rate</div>
+        <div class="metric-value" id="errorRate">0%</div>
+        <div class="metric-sub">4xx + 5xx responses</div>
+      </div>
+    </div>
+
+    <div class="content-grid">
+      <div class="panel charts-card">
+        <div class="panel-header">
+          <h2>Traffic Overview</h2>
+          <div class="badge">Live via Socket.IO</div>
+        </div>
+        <div class="charts-row">
+          <div class="card chart-card">
+            <div class="metric-label">Request Rate</div>
+            <div class="chart-wrap">
+              <canvas id="reqChart"></canvas>
+            </div>
+          </div>
+          <div class="card chart-card">
+            <div class="metric-label">Endpoint Distribution</div>
+            <div class="chart-wrap">
+              <canvas id="endpointChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <h2>Detection Panel</h2>
+          <div class="badge" id="alertBadge">NORMAL</div>
+        </div>
+        <div class="stat-list">
+          <div class="stat-row"><span>ML Model</span><strong id="mlStatus">Training...</strong></div>
+          <div class="stat-row"><span>Attack Type</span><strong id="attackType">None</strong></div>
+          <div class="stat-row"><span>ML Score</span><strong id="mlScore">--</strong></div>
+          <div class="stat-row"><span>Baseline req/s</span><strong id="baselineRate">--</strong></div>
+          <div class="stat-row"><span>Circuit Breaker</span><strong id="breakerState">CLOSED</strong></div>
+        </div>
+        <div class="detection-box">
+          <div class="muted">Mitigation Recommendation</div>
+          <div id="mitigationBox" class="callout">Waiting for traffic...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <div class="table-toolbar">
+        <div>
+          <strong>Live Request Log</strong>
+          <div class="meta">Last 50 entries, auto-refresh every 2 seconds</div>
+        </div>
+        <div class="filters">
+          <button class="filter-btn active" data-filter="all">All</button>
+          <button class="filter-btn" data-filter="blocked">Blocked</button>
+          <button class="filter-btn" data-filter="errors">Errors</button>
+        </div>
+      </div>
+      <div class="log-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>IP</th>
+              <th>Endpoint</th>
+              <th>Method</th>
+              <th>Status</th>
+              <th>Response Time</th>
+              <th>Blocked</th>
+            </tr>
+          </thead>
+          <tbody id="logTable"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const socket = io("http://localhost:8080", { transports: ["websocket", "polling"] });
+    const historyData = [];
+    let endpointDistribution = {};
+    let currentLogs = [];
+    let currentFilter = "all";
+
+    const reqChart = new Chart(document.getElementById("reqChart"), {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [{
+          label: "req/s",
+          data: [],
+          borderColor: "#2563eb",
+          backgroundColor: "rgba(37,99,235,0.1)",
+          fill: true,
+          tension: 0.35,
+          pointRadius: 2,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { display: false } },
+          y: { beginAtZero: true }
+        }
+      }
+    });
+
+    const endpointChart = new Chart(document.getElementById("endpointChart"), {
+      type: "doughnut",
+      data: { labels: [], datasets: [{ data: [], backgroundColor: ["#2563eb", "#16a34a", "#d97706", "#dc2626", "#7c3aed", "#0891b2"] }] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: "bottom" } }
+      }
+    });
+
+    function formatTime(value) {
+      const date = new Date(value * 1000);
+      return date.toLocaleTimeString();
+    }
+
+    function updateClock() {
+      document.getElementById("clock").textContent = new Date().toLocaleTimeString();
+    }
+
+    function setStatusPill(level) {
+      const pill = document.getElementById("statusPill");
+      pill.classList.remove("status-normal", "status-warning", "status-critical");
+      if (level === "CRITICAL") {
+        pill.classList.add("status-critical");
+      } else if (level === "WARNING") {
+        pill.classList.add("status-warning");
+      } else {
+        pill.classList.add("status-normal");
+      }
+      pill.textContent = level || "NORMAL";
+
+      const badge = document.getElementById("alertBadge");
+      badge.textContent = level || "NORMAL";
+    }
+
+    function updateDetectionPanel(data) {
+      const level = data.alert_level || "NORMAL";
+      setStatusPill(level);
+      document.getElementById("reqRate").textContent = (data.current_req_rate || 0).toFixed(1);
+      document.getElementById("uniqueIps").textContent = data.unique_ips ?? 0;
+      document.getElementById("avgResponse").textContent = `${((data.avg_response_time || 0) * 1000).toFixed(1)} ms`;
+      document.getElementById("errorRate").textContent = `${((data.error_rate || 0) * 100).toFixed(1)}%`;
+      document.getElementById("mlStatus").textContent = data.ml_trained ? "Active (trained on 30s of data)" : "Training...";
+      document.getElementById("attackType").textContent = data.attack_type || "None";
+      document.getElementById("mlScore").textContent = data.ml_score === null || data.ml_score === undefined ? "--" : data.ml_score.toFixed(4);
+      document.getElementById("baselineRate").textContent = data.baseline_req_rate ? data.baseline_req_rate.toFixed(1) : "--";
+
+      const mitigation = data.mitigation_recommendation || "No mitigation recommendation yet.";
+      const mitigationBox = document.getElementById("mitigationBox");
+      mitigationBox.textContent = mitigation;
+      mitigationBox.classList.remove("critical", "warning");
+      if (level === "CRITICAL") {
+        mitigationBox.classList.add("critical");
+      } else if (level === "WARNING") {
+        mitigationBox.classList.add("warning");
+      }
+
+      const breaker = data.mitigation_status?.circuit_breaker_state || "CLOSED";
+      const breakerEl = document.getElementById("breakerState");
+      breakerEl.innerHTML = `<span class="state-dot ${breaker === "OPEN" ? "dot-red" : breaker === "HALF_OPEN" ? "dot-amber" : "dot-green"}"></span>${breaker}`;
+    }
+
+    function updateCharts(data) {
+      const history = data.history || [];
+      reqChart.data.labels = history.map(item => new Date(item.timestamp * 1000).toLocaleTimeString());
+      reqChart.data.datasets[0].data = history.map(item => item.req_rate);
+      reqChart.update("none");
+
+      const latestHistory = history[history.length - 1] || {};
+      endpointDistribution = data.endpoint_distribution || latestHistory.endpoint_distribution || {};
+      const labels = Object.keys(endpointDistribution);
+      const values = labels.map(label => endpointDistribution[label]);
+      endpointChart.data.labels = labels;
+      endpointChart.data.datasets[0].data = values;
+      endpointChart.update("none");
+    }
+
+    function renderLogs() {
+      const rows = currentLogs.filter((row) => {
+        if (currentFilter === "blocked") return row.blocked;
+        if (currentFilter === "errors") return row.status_code >= 400;
+        return true;
+      }).slice(-50);
+
+      const table = document.getElementById("logTable");
+      table.innerHTML = rows.reverse().map((row) => {
+        const blockedClass = row.blocked ? "blocked" : "";
+        return `
+          <tr class="${blockedClass}">
+            <td>${formatTime(row.timestamp)}</td>
+            <td>${row.ip || "-"}</td>
+            <td>${row.endpoint || "-"}</td>
+            <td>${row.method || "-"}</td>
+            <td>${row.status_code ?? "-"}</td>
+            <td>${((row.response_time || 0) * 1000).toFixed(1)} ms</td>
+            <td>${row.blocked ? "Yes" : "No"}</td>
+          </tr>`;
+      }).join("");
+    }
+
+    async function refreshLogs() {
+      try {
+        const response = await fetch("/api/logs");
+        currentLogs = await response.json();
+        renderLogs();
+      } catch (error) {
+        console.warn("Unable to refresh logs", error);
+      }
+    }
+
+    socket.on("metrics_update", (data) => {
+      updateDetectionPanel(data);
+      updateCharts(data);
+    });
+
+    document.querySelectorAll(".filter-btn").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".filter-btn").forEach((el) => el.classList.remove("active"));
+        button.classList.add("active");
+        currentFilter = button.dataset.filter;
+        renderLogs();
+      });
+    });
+
+    updateClock();
+    setInterval(updateClock, 1000);
+    refreshLogs();
+    setInterval(refreshLogs, 2000);
+  </script>
+</body>
+</html>
