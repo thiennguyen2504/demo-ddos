@@ -44,8 +44,11 @@ attack_task: Optional[asyncio.Task] = None
 counter_lock = asyncio.Lock()
 
 
+# Pre-generate a fixed pool of IPs so rate limiting can trigger
+_ip_pool = [f"10.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}" for _ in range(5)]
+
 def _random_ip():
-    return f"10.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
+    return random.choice(_ip_pool)
 
 
 def _endpoint_payload(mode):

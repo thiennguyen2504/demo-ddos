@@ -10,126 +10,106 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from shared_state import request_log, request_log_lock
 
 
-RATE_LIMIT_THRESHOLD = 100
-RATE_LIMIT_WINDOW_SECONDS = 10
-HIGH_RPS_THRESHOLD = 300
-CIRCUIT_BREAKER_OPEN_SECONDS = 10
-
 app = Flask(__name__)
 CORS(app)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 state_lock = threading.Lock()
-per_ip_windows = defaultdict(deque)
 global_request_times = deque()
-blocked_ips = set()
-current_req_per_sec = 0
-circuit_breaker_state = "CLOSED"
-consecutive_high_seconds = 0
-open_until = 0.0
-half_open_started = 0.0
-monitor_started = False
+per_ip_windows = defaultdict(deque)
+endpoint_windows = defaultdict(deque)
 
-INTERNAL_ENDPOINTS = {"/internal/mitigation-status", "/internal/logs"}
+mitigation_state = {
+    "active": False,
+    "mode": None,   # "rate_limit" | "ue_throttle" | "slice_cap"
+    "blocked_ips": set(),
+    "blocked_endpoints": set(),
+    "throttle_endpoint": None,
+    "cap_endpoint": None,
+    "actions_log": []
+}
 
-
-def _purge_stale_entries(now):
-    while global_request_times and now - global_request_times[0] > 1:
-        global_request_times.popleft()
-
-    for ip, timestamps in list(per_ip_windows.items()):
-        while timestamps and now - timestamps[0] > RATE_LIMIT_WINDOW_SECONDS:
-            timestamps.popleft()
-        if timestamps:
-            if len(timestamps) >= RATE_LIMIT_THRESHOLD:
-                blocked_ips.add(ip)
-            else:
-                blocked_ips.discard(ip)
-        else:
-            blocked_ips.discard(ip)
-            del per_ip_windows[ip]
-
-
-def _monitor_mitigation_state():
-    global current_req_per_sec, circuit_breaker_state, consecutive_high_seconds
-    global open_until, half_open_started
-
-    while True:
-        time.sleep(1)
-        now = time.time()
-        with state_lock:
-            _purge_stale_entries(now)
-            current_req_per_sec = len(global_request_times)
-
-            if circuit_breaker_state == "CLOSED":
-                if current_req_per_sec > HIGH_RPS_THRESHOLD:
-                    consecutive_high_seconds += 1
-                else:
-                    consecutive_high_seconds = 0
-
-                if consecutive_high_seconds >= 3:
-                    circuit_breaker_state = "OPEN"
-                    open_until = now + CIRCUIT_BREAKER_OPEN_SECONDS
-                    half_open_started = 0.0
-                    consecutive_high_seconds = 0
-
-            elif circuit_breaker_state == "OPEN":
-                if now >= open_until:
-                    circuit_breaker_state = "HALF_OPEN"
-                    half_open_started = now
-
-            elif circuit_breaker_state == "HALF_OPEN":
-                if current_req_per_sec <= HIGH_RPS_THRESHOLD:
-                    circuit_breaker_state = "CLOSED"
-                    consecutive_high_seconds = 0
-                    open_until = 0.0
-                    half_open_started = 0.0
-                else:
-                    circuit_breaker_state = "OPEN"
-                    open_until = now + CIRCUIT_BREAKER_OPEN_SECONDS
-                    half_open_started = 0.0
-
-
-def _ensure_monitor_started():
-    global monitor_started
-    if monitor_started:
-        return
-    monitor_started = True
-    thread = threading.Thread(target=_monitor_mitigation_state, daemon=True)
-    thread.start()
+INTERNAL_ENDPOINTS = {"/internal/mitigation-status", "/internal/logs", "/internal/mitigation/activate", "/internal/mitigation/deactivate"}
 
 
 @app.before_request
 def mitigation_layer():
     g.request_start = time.time()
     g.blocked = False
+    g.mitigation_delay = 0
 
     if request.path in INTERNAL_ENDPOINTS:
         return None
 
     now = time.time()
     ip_address = request.remote_addr or "unknown"
+    path = request.path
 
     with state_lock:
         global_request_times.append(now)
         while global_request_times and now - global_request_times[0] > 1:
             global_request_times.popleft()
 
-        if circuit_breaker_state == "OPEN":
-            g.blocked = True
-            return jsonify({"error": "circuit_breaker_open", "state": circuit_breaker_state}), 503
+        if not mitigation_state["active"]:
+            return None
 
-        timestamps = per_ip_windows[ip_address]
-        while timestamps and now - timestamps[0] > RATE_LIMIT_WINDOW_SECONDS:
-            timestamps.popleft()
+        mode = mitigation_state["mode"]
 
-        if len(timestamps) >= RATE_LIMIT_THRESHOLD:
-            blocked_ips.add(ip_address)
-            g.blocked = True
-            return jsonify({"error": "rate_limit_exceeded", "ip": ip_address}), 429
+        if mode == "rate_limit":
+            timestamps = per_ip_windows[ip_address]
+            while timestamps and now - timestamps[0] > 10:
+                timestamps.popleft()
+            timestamps.append(now)
 
-        timestamps.append(now)
-        blocked_ips.discard(ip_address)
+            if len(timestamps) > 80 and ip_address not in mitigation_state["blocked_ips"]:
+                mitigation_state["blocked_ips"].add(ip_address)
+                mitigation_state["actions_log"].append({
+                    "time": now,
+                    "action": f"Blocked IP {ip_address} — exceeded 80 req/10s"
+                })
+                if len(mitigation_state["actions_log"]) > 100:
+                    mitigation_state["actions_log"].pop(0)
+
+            if ip_address in mitigation_state["blocked_ips"]:
+                g.blocked = True
+                return jsonify({"error": "rate_limit_exceeded", "ip": ip_address}), 429
+
+        elif mode == "ue_throttle" and path == "/ue-registration":
+            timestamps = endpoint_windows[path]
+            while timestamps and now - timestamps[0] > 1:
+                timestamps.popleft()
+
+            if len(timestamps) >= 30:
+                mitigation_state["actions_log"].append({
+                    "time": now,
+                    "action": f"Throttled /ue-registration — rate {len(timestamps) + 1} req/s exceeds limit"
+                })
+                if len(mitigation_state["actions_log"]) > 100:
+                    mitigation_state["actions_log"].pop(0)
+                g.blocked = True
+                return jsonify({"error": "throttle_exceeded", "endpoint": path}), 429
+            else:
+                timestamps.append(now)
+                g.mitigation_delay = 0.5
+
+        elif mode == "slice_cap" and path == "/slice/allocate":
+            timestamps = endpoint_windows[path]
+            while timestamps and now - timestamps[0] > 1:
+                timestamps.popleft()
+
+            if len(timestamps) >= 20:
+                mitigation_state["actions_log"].append({
+                    "time": now,
+                    "action": "Queued /slice/allocate request — cap reached"
+                })
+                if len(mitigation_state["actions_log"]) > 100:
+                    mitigation_state["actions_log"].pop(0)
+                g.mitigation_delay = 1.0
+            else:
+                timestamps.append(now)
+
+    if getattr(g, "mitigation_delay", 0) > 0:
+        time.sleep(g.mitigation_delay)
 
 
 @app.after_request
@@ -152,14 +132,55 @@ def log_request(response):
     return response
 
 
+@app.post("/internal/mitigation/activate")
+def mitigation_activate():
+    payload = request.get_json(silent=True) or {}
+    mode = payload.get("mode")
+    if mode not in ["rate_limit", "ue_throttle", "slice_cap"]:
+        return jsonify({"error": "invalid mode"}), 400
+        
+    with state_lock:
+        mitigation_state["active"] = True
+        mitigation_state["mode"] = mode
+        if mode == "rate_limit":
+            mitigation_state["throttle_endpoint"] = None
+            mitigation_state["cap_endpoint"] = None
+        elif mode == "ue_throttle":
+            mitigation_state["throttle_endpoint"] = "/ue-registration"
+            mitigation_state["cap_endpoint"] = None
+        elif mode == "slice_cap":
+            mitigation_state["throttle_endpoint"] = None
+            mitigation_state["cap_endpoint"] = "/slice/allocate"
+            
+    return jsonify({"status": "activated", "mode": mode})
+
+@app.post("/internal/mitigation/deactivate")
+def mitigation_deactivate():
+    with state_lock:
+        mitigation_state["active"] = False
+        mitigation_state["mode"] = None
+        mitigation_state["blocked_ips"].clear()
+        mitigation_state["blocked_endpoints"].clear()
+        mitigation_state["throttle_endpoint"] = None
+        mitigation_state["cap_endpoint"] = None
+        mitigation_state["actions_log"].clear()
+        per_ip_windows.clear()
+        endpoint_windows.clear()
+        
+    return jsonify({"status": "deactivated"})
+
 @app.get("/internal/mitigation-status")
 def mitigation_status():
     with state_lock:
         payload = {
-            "rate_limit_active": bool(blocked_ips),
-            "circuit_breaker_state": circuit_breaker_state,
-            "blocked_ips": sorted(blocked_ips),
-            "current_req_per_sec": current_req_per_sec,
+            "active": mitigation_state["active"],
+            "mode": mitigation_state["mode"],
+            "blocked_ips": sorted(list(mitigation_state["blocked_ips"])),
+            "blocked_endpoints": sorted(list(mitigation_state["blocked_endpoints"])),
+            "throttle_endpoint": mitigation_state["throttle_endpoint"],
+            "cap_endpoint": mitigation_state["cap_endpoint"],
+            "actions_log": list(mitigation_state["actions_log"])[-50:],
+            "current_req_per_sec": len(global_request_times)
         }
     return jsonify(payload)
 
@@ -231,7 +252,6 @@ def slice_allocate():
 
 
 def main():
-    _ensure_monitor_started()
     app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False, threaded=True)
 
 

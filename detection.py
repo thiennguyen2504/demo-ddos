@@ -71,17 +71,16 @@ def _compute_features(logs, now):
 
 
 def _classify_attack(snapshot):
-    req_rate = snapshot["req_rate"]
-    unique_ips = snapshot["unique_ips"]
-    error_rate = snapshot["error_rate"]
-    top_endpoint = snapshot["top_endpoint"] or ""
-    top_endpoint_ratio = snapshot["top_endpoint_ratio"]
+    req_rate       = snapshot["req_rate"]
+    unique_ips     = snapshot["unique_ips"]
+    top_endpoint   = snapshot["top_endpoint"] or ""
+    top_ratio      = snapshot["top_endpoint_ratio"]
 
-    if top_endpoint == "/ue-registration" and req_rate >= 120 and unique_ips >= 25:
+    if top_endpoint == "/ue-registration" and req_rate >= 50 and unique_ips >= 10:
         return "SIGNALING_STORM"
-    if top_endpoint == "/slice/allocate" and top_endpoint_ratio >= 0.6 and req_rate >= 80:
+    if top_endpoint == "/slice/allocate" and top_ratio >= 0.55 and req_rate >= 30:
         return "SLICE_EXHAUSTION"
-    if req_rate >= 150 and unique_ips <= 50 and error_rate >= 0.15:
+    if req_rate >= 50:
         return "HTTP_FLOOD"
     return "UNKNOWN_DDOS"
 
@@ -137,7 +136,10 @@ def _detection_loop():
             ml_score = float(model.decision_function([features])[0])
             ml_anomaly = prediction == -1
 
-        statistical_alert = baseline_req_rate > 0 and snapshot["req_rate"] > baseline_req_rate * 3
+        statistical_alert = (
+            (baseline_req_rate > 0 and snapshot["req_rate"] > baseline_req_rate * 3)
+            or snapshot["req_rate"] > 50
+        )
         alert_triggered = statistical_alert or ml_anomaly
         attack_type = _classify_attack(snapshot) if alert_triggered else None
         if alert_triggered and attack_type is None:
