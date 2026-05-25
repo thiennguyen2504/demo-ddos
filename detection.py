@@ -33,6 +33,7 @@ def _compute_features(logs, now):
         for entry in logs
         if now - float(entry.get("timestamp", 0)) <= NORMAL_WINDOW_SECONDS
         and entry.get("endpoint") not in {"/internal/logs", "/internal/mitigation-status"}
+        and not entry.get("blocked", False)
     ]
 
     total = len(recent_logs)
