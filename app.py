@@ -9,10 +9,6 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-import eventlet
-
-eventlet.monkey_patch()
-
 from flask import Flask, jsonify, render_template  # noqa: E402
 from flask_cors import CORS  # noqa: E402
 from flask_socketio import SocketIO  # noqa: E402
@@ -27,7 +23,7 @@ SERVER_URL = "http://127.0.0.1:5000"
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
 app.config["SECRET_KEY"] = "5g-ddos-demo"
 CORS(app)
-socketio = SocketIO(app, async_mode="eventlet", cors_allowed_origins="*")
+socketio = SocketIO(app, async_mode="threading", cors_allowed_origins="*")
 
 processes = []
 shutdown_lock = threading.Lock()

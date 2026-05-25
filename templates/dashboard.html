@@ -456,7 +456,7 @@
     let borderInterval = null;
 
     async function activateMitigation(mode) {
-      await fetch("/internal/mitigation/activate", {
+      await fetch("http://localhost:5000/internal/mitigation/activate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode })
@@ -464,7 +464,7 @@
     }
 
     async function deactivateMitigation() {
-      await fetch("/internal/mitigation/deactivate", { method: "POST" });
+      await fetch("http://localhost:5000/internal/mitigation/deactivate", { method: "POST" });
     }
 
     function updateMitigationUI(state) {

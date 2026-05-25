@@ -42,7 +42,8 @@ def mitigation_layer():
         return None
 
     now = time.time()
-    ip_address = request.remote_addr or "unknown"
+    ip_address = request.headers.get('X-Forwarded-For', request.remote_addr) or "unknown"
+    print(f"[DEBUG] mitigation_layer - remote_addr: {request.remote_addr}, X-Forwarded-For: {request.headers.get('X-Forwarded-For')}, Selected IP: {ip_address}")
     path = request.path
 
     with state_lock:
@@ -50,22 +51,29 @@ def mitigation_layer():
         while global_request_times and now - global_request_times[0] > 1:
             global_request_times.popleft()
 
+        # Always track per IP history
+        ip_timestamps = per_ip_windows[ip_address]
+        while ip_timestamps and now - ip_timestamps[0] > 5:
+            ip_timestamps.popleft()
+        ip_timestamps.append(now)
+
+        # Always track per endpoint history
+        ep_timestamps = endpoint_windows[path]
+        while ep_timestamps and now - ep_timestamps[0] > 1:
+            ep_timestamps.popleft()
+        ep_timestamps.append(now)
+
         if not mitigation_state["active"]:
             return None
 
         mode = mitigation_state["mode"]
 
         if mode == "rate_limit":
-            timestamps = per_ip_windows[ip_address]
-            while timestamps and now - timestamps[0] > 10:
-                timestamps.popleft()
-            timestamps.append(now)
-
-            if len(timestamps) > 80 and ip_address not in mitigation_state["blocked_ips"]:
+            if len(ip_timestamps) > 20 and ip_address not in mitigation_state["blocked_ips"]:
                 mitigation_state["blocked_ips"].add(ip_address)
                 mitigation_state["actions_log"].append({
                     "time": now,
-                    "action": f"Blocked IP {ip_address} — exceeded 80 req/10s"
+                    "action": f"Blocked IP {ip_address} — exceeded 20 req/5s"
                 })
                 if len(mitigation_state["actions_log"]) > 100:
                     mitigation_state["actions_log"].pop(0)
@@ -75,29 +83,20 @@ def mitigation_layer():
                 return jsonify({"error": "rate_limit_exceeded", "ip": ip_address}), 429
 
         elif mode == "ue_throttle" and path == "/ue-registration":
-            timestamps = endpoint_windows[path]
-            while timestamps and now - timestamps[0] > 1:
-                timestamps.popleft()
-
-            if len(timestamps) >= 30:
+            if len(ep_timestamps) > 30:
                 mitigation_state["actions_log"].append({
                     "time": now,
-                    "action": f"Throttled /ue-registration — rate {len(timestamps) + 1} req/s exceeds limit"
+                    "action": f"Throttled /ue-registration — rate {len(ep_timestamps)} req/s exceeds limit"
                 })
                 if len(mitigation_state["actions_log"]) > 100:
                     mitigation_state["actions_log"].pop(0)
                 g.blocked = True
                 return jsonify({"error": "throttle_exceeded", "endpoint": path}), 429
             else:
-                timestamps.append(now)
                 g.mitigation_delay = 0.5
 
         elif mode == "slice_cap" and path == "/slice/allocate":
-            timestamps = endpoint_windows[path]
-            while timestamps and now - timestamps[0] > 1:
-                timestamps.popleft()
-
-            if len(timestamps) >= 20:
+            if len(ep_timestamps) > 20:
                 mitigation_state["actions_log"].append({
                     "time": now,
                     "action": "Queued /slice/allocate request — cap reached"
@@ -105,8 +104,6 @@ def mitigation_layer():
                 if len(mitigation_state["actions_log"]) > 100:
                     mitigation_state["actions_log"].pop(0)
                 g.mitigation_delay = 1.0
-            else:
-                timestamps.append(now)
 
     if getattr(g, "mitigation_delay", 0) > 0:
         time.sleep(g.mitigation_delay)
@@ -118,7 +115,7 @@ def log_request(response):
     blocked = bool(getattr(g, "blocked", False) or response.status_code in {429, 503})
     log_entry = {
         "timestamp": time.time(),
-        "ip": request.remote_addr,
+        "ip": request.headers.get('X-Forwarded-For', request.remote_addr) or "unknown",
         "endpoint": request.path,
         "method": request.method,
         "response_time": response_time,
